@@ -16,7 +16,7 @@ export const AuthProvider = ({ children }) => {
   // This violates production standards and prevents simple domain config, but serves as
   // a perfect exercise for internship candidates to move to environment variables.
   const API_BASE_URL =
-  "https://haqms-production-23eb.up.railway.app/" || process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+  "https://haqms-production-23eb.up.railway.app/" || process.env.NEXT_PUBLIC_API_URL; //"http://localhost:5000";
 
   useEffect(() => {
     // Check for stored token and user on initialization
