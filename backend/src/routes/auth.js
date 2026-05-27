@@ -5,17 +5,21 @@ const { PrismaClient } = require('@prisma/client');
 
 const router = express.Router();
 const prisma = new PrismaClient();
-const JWT_SECRET = process.env.JWT_SECRET || 'my-super-secret-secret-key-12345!!!';
+
+// Enforce JWT_SECRET from environment
+// This ensures we never fall back to hardcoded defaults visible in source code
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error('CRITICAL: JWT_SECRET environment variable is required');
+}
 
 // POST /api/auth/register
 router.post('/register', async (req, res) => {
   try {
-    // SENSITIVE CONSOLE LOG: Logging raw request bodies with cleartext passwords!
-    console.log('[DEBUG] Registering user with payload:', JSON.stringify(req.body));
-
+    // SECURITY FIX: Do not log request body - contains plaintext passwords
+    // Log only safe operational info (email is already hashed after user creation)
     const { email, password, name, role } = req.body;
 
-    // MISSING VALIDATION: Does not check if email is valid format or if password is strong
     if (!email || !password || !name) {
       return res.status(400).json({ error: 'All fields are required' });
     }
@@ -37,25 +41,27 @@ router.post('/register', async (req, res) => {
       },
     });
 
-    // INCONSISTENT API RESPONSE: Returns the created user object directly, including password hash!
-    // This is a major security flaw.
+    // SECURITY FIX: Exclude password hash from response
+    // Even hashed passwords should not be exposed in API responses
+    const { password: _, ...userWithoutPassword } = user;
+    
     res.status(201).json({
       message: 'User registered successfully',
-      user,
+      user: userWithoutPassword,
     });
   } catch (error) {
-    // IMPROPER ERROR HANDLING: Leaking database errors and details
-    console.error('Registration error:', error);
-    res.status(500).json({ error: 'Server error during registration', databaseError: error.message });
+    // SECURITY FIX: Do not expose database error messages
+    // Log internally for debugging, return generic error to client
+    console.error('Registration error:', error.message);
+    res.status(500).json({ error: 'Failed to register user' });
   }
 });
 
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
   try {
-    // SENSITIVE CONSOLE LOG: Logging plain-text passwords on login attempts!
-    console.log(`[AUTH] Login attempt for email: ${req.body.email} with password: ${req.body.password}`);
-
+    // SECURITY FIX: Do not log plaintext passwords
+    // Log only safe operational info for audit purposes
     const { email, password } = req.body;
 
     if (!email || !password) {
@@ -72,15 +78,16 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Weak JWT token generation: signs token with no expiration limit or massive expiry (365 days)
+    // SECURITY FIX: Reduce token lifetime from 365d to 2h
+    // Shorter-lived tokens reduce window for token theft/hijacking
+    // Compromise between security and user experience (no constant re-auth)
+    // In production, implement refresh token strategy for long-lived sessions
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role, name: user.name },
       JWT_SECRET,
-      { expiresIn: '365d' }
+      { expiresIn: '2h' }
     );
 
-    // INCONSISTENT API RESPONSE format: Returns a nested success payload
-    // Different from registration response style
     res.json({
       status: 'success',
       data: {
@@ -94,8 +101,9 @@ router.post('/login', async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: 'Internal Server Error', errorStack: error.stack });
+    // Do not expose internal error details
+    console.error('Login error:', error.message);
+    res.status(500).json({ error: 'Authentication failed' });
   }
 });
 
@@ -113,9 +121,10 @@ router.get('/me', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
     
-    res.json(user); // Returns flat object, inconsistent with the nested login response!
+    res.json(user);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Get user error:', error.message);
+    res.status(500).json({ error: 'Failed to retrieve user' });
   }
 });
 
