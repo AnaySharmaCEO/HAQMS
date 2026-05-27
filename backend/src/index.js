@@ -25,8 +25,8 @@ const PORT = process.env.PORT || 5000;
 
 app.use(cors({
   origin: [
-    "http://localhost:3000",
-    "haqmsfrontend.vercel.app"
+    "haqmsfrontend.vercel.app",
+    "http://localhost:3000"
   ],
   credentials: true
 }));
