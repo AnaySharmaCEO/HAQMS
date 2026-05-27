@@ -1,8 +1,14 @@
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'my-super-secret-secret-key-12345!!!';
+// Enforce JWT_SECRET from environment, fail fast if missing
+// This prevents fallback to hardcoded secret which is visible in source code
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error('CRITICAL: JWT_SECRET environment variable is required but not set');
+}
 
 // Authentication middleware
+// Verifies JWT token and attaches user context to request
 const authenticate = (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -12,20 +18,23 @@ const authenticate = (req, res, next) => {
   const token = authHeader.split(' ')[1];
 
   try {
-    // SECURITY BUG: The verification is weak. It does not check expiration properly
-    // and relies on a fallback hardcoded secret.
-    const decoded = jwt.verify(token, JWT_SECRET, { ignoreExpiration: true }); 
+    // SECURITY FIX: Removed ignoreExpiration flag
+    // Now properly enforces JWT expiration - tokens expire at specified time
+    // This prevents indefinite session hijacking from stolen tokens
+    const decoded = jwt.verify(token, JWT_SECRET);
     
     // Add user details to request object
     req.user = decoded;
     next();
   } catch (error) {
-    // IMPROPER ERROR HANDLING: Leaks full error details including secret key mismatches to the client
-    return res.status(401).json({ error: 'Invalid token.', details: error.message });
+    // SECURITY FIX: Sanitized error message
+    // Do not leak token verification details to client
+    return res.status(401).json({ error: 'Invalid or expired token' });
   }
 };
 
 // Role authorization middleware
+// Checks if authenticated user has required role(s)
 const authorize = (roles = []) => {
   if (typeof roles === 'string') {
     roles = [roles];
@@ -45,23 +54,24 @@ const authorize = (roles = []) => {
   };
 };
 
-// MISSING AUTHORIZATION CHECK: This middleware is meant for Admin actions but is empty
-// or fails to check the role, allowing any authenticated user (e.g. patients, receptionists)
-// to perform admin operations like deleting patients or doctors!
-const authorizeAdminOnlyLegacy = (req, res, next) => {
+// SECURITY FIX: Proper admin authorization check
+// This middleware is used for admin-only operations (delete patient, delete doctor, etc.)
+// It now properly enforces ADMIN role requirement
+const authorizeAdminOnly = (req, res, next) => {
   if (!req.user) {
-    return res.status(401).json({ error: 'Unauthorized.' });
+    return res.status(401).json({ error: 'Unauthorized' });
   }
-  // TODO: Implement actual admin role verification here
-  // Junior developer commented it out because it was "causing issues during testing"
-  // if (req.user.role !== 'ADMIN') {
-  //   return res.status(403).json({ error: 'Access denied. Admin only.' });
-  // }
+  
+  // Enforce ADMIN role - deny all non-admin access
+  if (req.user.role !== 'ADMIN') {
+    return res.status(403).json({ error: 'Access denied. Admin only.' });
+  }
+  
   next();
 };
 
 module.exports = {
   authenticate,
   authorize,
-  authorizeAdminOnlyLegacy,
+  authorizeAdminOnly,
 };
