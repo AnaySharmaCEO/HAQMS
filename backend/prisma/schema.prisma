@@ -37,9 +37,6 @@ model User {
   doctor Doctor?
 }
 
-// SCHEMA BUG: No unique constraint on (doctorId, appointmentDate).
-// This permits double-booking the same physician at the exact same time slot.
-// A proper constraint would be: @@unique([doctorId, appointmentDate])
 model Doctor {
   id              String   @id @default(uuid())
   userId          String?  @unique
@@ -53,10 +50,12 @@ model Doctor {
   availableTo     String   @default("17:00")
   createdAt       DateTime @default(now())
 
-  // MISSING INDEX: No index on department or specialization.
-  // Filtering/searching by these columns does full table scans at scale.
-  appointments Appointment[]
-  queueTokens  QueueToken[]
+  appointments       Appointment[]
+  queueTokens        QueueToken[]
+  queueDailyCounters QueueDailyCounter[]
+
+  @@index([department])
+  @@index([specialization])
 }
 
 model Patient {
@@ -66,7 +65,7 @@ model Patient {
   phoneNumber    String
   age            Int
   gender         String
-  medicalHistory String?  // Nullable — intentional crash trigger for frontend bug
+  medicalHistory String?
   createdAt      DateTime @default(now())
 
   appointments Appointment[]
@@ -84,25 +83,38 @@ model Appointment {
   status          AppointmentStatus @default(PENDING)
   createdAt       DateTime          @default(now())
 
-  // MISSING INDEX: No index on (doctorId, status) — important for worklist queries.
-  // MISSING INDEX: No index on patientId foreign key.
   queueTokens QueueToken[]
+
+  @@unique([doctorId, appointmentDate])
+  @@index([patientId])
+  @@index([doctorId, status])
+}
+
+model QueueDailyCounter {
+  id        String   @id @default(uuid())
+  doctorId  String
+  doctor    Doctor   @relation(fields: [doctorId], references: [id])
+  queueDate DateTime @db.Date
+  lastToken Int      @default(0)
+
+  @@unique([doctorId, queueDate])
 }
 
 model QueueToken {
-  id            String      @id @default(uuid())
+  id            String       @id @default(uuid())
   tokenNumber   Int
+  queueDay      DateTime     @db.Date
   patientId     String
-  patient       Patient     @relation(fields: [patientId], references: [id])
+  patient       Patient      @relation(fields: [patientId], references: [id])
   doctorId      String
-  doctor        Doctor      @relation(fields: [doctorId], references: [id])
+  doctor        Doctor       @relation(fields: [doctorId], references: [id])
   appointmentId String?
   appointment   Appointment? @relation(fields: [appointmentId], references: [id])
-  status        QueueStatus @default(WAITING)
-  createdAt     DateTime    @default(now())
+  status        QueueStatus  @default(WAITING)
+  createdAt     DateTime     @default(now())
 
-  // MISSING INDEX: No index on (doctorId, createdAt) — used in daily token aggregation.
-  // MISSING INDEX: No index on status — used in frequent status filter queries.
-  // SCHEMA BUG: No unique constraint on (doctorId, tokenNumber, date) —
-  // race condition in checkin route can produce duplicate token numbers for the same doctor+day.
+  @@unique([doctorId, queueDay, tokenNumber])
+  @@index([patientId])
+  @@index([doctorId, status])
+  @@index([doctorId, createdAt])
 }

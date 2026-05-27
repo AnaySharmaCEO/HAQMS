@@ -1,9 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import Navbar from '@/components/common/Navbar';
 import { useRouter } from 'next/navigation';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import Link from 'next/link';
 import { 
   Users, CalendarDays, Activity, Search, Sparkles, UserPlus, 
   Trash2, ClipboardList, TrendingUp, DollarSign, Award, Clock,
@@ -19,12 +21,14 @@ export default function Dashboard() {
     if (!user) {
       router.push('/login');
     }
-  }, [user]);
-
-  if (!user) return null;
+  }, [router, user]);
 
   // Global State
-  const [activeTab, setActiveTab] = useState(user.role === 'ADMIN' ? 'reports' : user.role === 'RECEPTIONIST' ? 'patients' : 'appointments');
+  const [activeTab, setActiveTab] = useState('patients');
+  useEffect(() => {
+    if (!user) return;
+    setActiveTab(user.role === 'ADMIN' ? 'reports' : user.role === 'RECEPTIONIST' ? 'patients' : 'appointments');
+  }, [user]);
 
   // ==========================================
   // STATE FOR RECEPTIONIST WORKFLOWS
@@ -34,6 +38,8 @@ export default function Dashboard() {
   const [patientSearch, setPatientSearch] = useState('');
   const [patientGender, setPatientGender] = useState('All');
   const [patientsPagination, setPatientsPagination] = useState({ page: 1, totalPages: 1 });
+
+  const debouncedPatientSearch = useDebouncedValue(patientSearch, 350);
   
   // Registration Form
   const [regName, setRegName] = useState('');
@@ -72,11 +78,13 @@ export default function Dashboard() {
   // ==========================================
   
   // Fetch Patients List
-  const fetchPatients = async (page = 1) => {
+  const fetchPatients = useCallback(async (page = 1) => {
     setPatientsLoading(true);
     try {
       // Inefficient memory pagination called from client
-      const res = await fetch(`${API_BASE_URL}/patients?page=${page}&limit=5&search=${patientSearch}&gender=${patientGender}`, {
+      const search = encodeURIComponent(debouncedPatientSearch);
+      const gender = encodeURIComponent(patientGender);
+      const res = await fetch(`${API_BASE_URL}/patients?page=${page}&limit=5&search=${search}&gender=${gender}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await res.json();
@@ -93,14 +101,15 @@ export default function Dashboard() {
     } finally {
       setPatientsLoading(false);
     }
-  };
+  }, [API_BASE_URL, debouncedPatientSearch, patientGender, token]);
 
   // Trigger Patient List Fetch (Every keystroke trigger re-renders parent! - Performance bug)
   useEffect(() => {
-    if (user.role === 'RECEPTIONIST' || user.role === 'ADMIN') {
+    if (user && (user.role === 'RECEPTIONIST' || user.role === 'ADMIN')) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       fetchPatients(1);
     }
-  }, [patientSearch, patientGender]);
+  }, [debouncedPatientSearch, patientGender, fetchPatients, user?.role]);
 
   // Fetch Doctors for booking drop-down
   const fetchDoctorsDropdown = async () => {
@@ -116,6 +125,7 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchDoctorsDropdown();
   }, []);
 
@@ -253,10 +263,10 @@ export default function Dashboard() {
   // DOCTOR WORKFLOW FUNCTIONS
   // ==========================================
   const fetchDoctorWorklist = async () => {
-    if (user.role !== 'DOCTOR') return;
+    if (!user || user.role !== 'DOCTOR') return;
     try {
       // Find matching doctor from doctors dropdown using user ID link
-      const matchedDoc = doctorsList.find(d => d.userId === user.id);
+      const matchedDoc = doctorsList.find(d => d.userId === user?.id);
       if (!matchedDoc) return;
 
       // 1. Fetch appointments for this doctor (N+1 database queries triggers inside server)
@@ -281,10 +291,10 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
-    if (user.role === 'DOCTOR' && doctorsList.length > 0) {
+    if (user?.role === 'DOCTOR' && doctorsList.length > 0) {
       fetchDoctorWorklist();
     }
-  }, [doctorsList]);
+  }, [doctorsList, user?.role]);
 
   // Update token status (WAITING -> CALLING -> COMPLETED / SKIPPED)
   const handleUpdateQueueStatus = async (tokenId, newStatus) => {
@@ -363,6 +373,14 @@ export default function Dashboard() {
       console.error(e);
     }
   };
+
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
+        <p className="text-slate-400 font-semibold animate-pulse">Loading dashboard...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -739,10 +757,6 @@ export default function Dashboard() {
               </p>
 
               <div className="space-y-6">
-                <div className="p-4 rounded-xl border border-teal-500/25 bg-teal-500/10 text-slate-700 dark:text-slate-300 text-xs leading-5">
-                  <strong>Token Generation Engine Note:</strong> Direct arrivals bypass appointments. The token engine automatically fetches the current days maximum token size and increments. 
-                  <span className="block mt-1 font-bold text-rose-500 uppercase tracking-wide">Warning: Vulnerable to check-in race conditions!</span>
-                </div>
 
                 <div className="space-y-4 text-xs font-semibold text-slate-700 dark:text-slate-300">
                   <div>
@@ -894,7 +908,9 @@ export default function Dashboard() {
                       without optional chaining! If medicalHistory is null (which is the case for Batman, Clark Kent, etc.),
                       this code throws: "Cannot read properties of null (reading 'toUpperCase')" and crashes the app! */}
                   <p className="text-slate-700 dark:text-slate-300 leading-5 text-sm font-semibold">
-                    {selectedPatientHistory.medicalHistory.toUpperCase()}
+                    {selectedPatientHistory.medicalHistory
+                      ? String(selectedPatientHistory.medicalHistory).toUpperCase()
+                      : 'No medical history recorded.'}
                   </p>
                 </div>
 
@@ -1111,7 +1127,7 @@ export default function Dashboard() {
                   type="text"
                   value={adminSearchQuery}
                   onChange={(e) => setAdminSearchQuery(e.target.value)}
-                  placeholder="Enter physician name search criteria (raw syntax supported)..."
+                  placeholder="Search physicians by name..."
                   className="block w-full pl-9 pr-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
                 />
               </div>
@@ -1124,16 +1140,6 @@ export default function Dashboard() {
               </button>
             </div>
 
-            <div className="p-3 bg-rose-500/10 text-rose-500 text-xs rounded-lg border border-rose-500/20 font-semibold leading-5 flex gap-3">
-              <ShieldAlert className="h-5 w-5 shrink-0" />
-              <div>
-                <strong>SQL Vulnerability alert:</strong> This search executes raw interpolation: 
-                <code className="block bg-black/10 dark:bg-black/30 p-1.5 rounded mt-1 font-mono">
-                  SELECT * FROM &quot;Doctor&quot; WHERE name ILIKE &apos;%&#123;query&#125;%&apos;
-                </code>
-                Can be audited by inputting standard SQL injection strings to leak full user login lists.
-              </div>
-            </div>
 
             {/* Doctors Result List */}
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

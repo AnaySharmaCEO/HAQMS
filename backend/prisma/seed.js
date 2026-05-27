@@ -367,11 +367,15 @@ async function main() {
 
   console.log(`✅ ${appointments.length} appointments seeded`);
 
+  const queueDay = new Date();
+  queueDay.setUTCHours(0, 0, 0, 0);
+
   // ─── Queue Tokens ──────────────────────────────────────────────────────────
   await Promise.all([
     prisma.queueToken.create({
       data: {
         tokenNumber: 1,
+        queueDay,
         patientId: patients[0].id,
         doctorId: doctor1.id,
         appointmentId: appointments[0].id,
@@ -381,6 +385,7 @@ async function main() {
     prisma.queueToken.create({
       data: {
         tokenNumber: 2,
+        queueDay,
         patientId: patients[1].id,
         doctorId: doctor1.id,
         appointmentId: appointments[1].id,
@@ -390,6 +395,7 @@ async function main() {
     prisma.queueToken.create({
       data: {
         tokenNumber: 3,
+        queueDay,
         patientId: patients[6].id,
         doctorId: doctor1.id,
         status: 'WAITING',
@@ -398,6 +404,7 @@ async function main() {
     prisma.queueToken.create({
       data: {
         tokenNumber: 1,
+        queueDay,
         patientId: patients[2].id,
         doctorId: doctor2.id,
         appointmentId: appointments[2].id,
@@ -407,6 +414,7 @@ async function main() {
     prisma.queueToken.create({
       data: {
         tokenNumber: 2,
+        queueDay,
         patientId: patients[8].id,
         doctorId: doctor2.id,
         status: 'WAITING',
@@ -415,11 +423,24 @@ async function main() {
     prisma.queueToken.create({
       data: {
         tokenNumber: 1,
+        queueDay,
         patientId: patients[7].id,
         doctorId: doctor3.id,
         appointmentId: appointments[5].id,
         status: 'WAITING',
       },
+    }),
+  ]);
+
+  await Promise.all([
+    prisma.queueDailyCounter.create({
+      data: { doctorId: doctor1.id, queueDate: queueDay, lastToken: 3 },
+    }),
+    prisma.queueDailyCounter.create({
+      data: { doctorId: doctor2.id, queueDate: queueDay, lastToken: 2 },
+    }),
+    prisma.queueDailyCounter.create({
+      data: { doctorId: doctor3.id, queueDate: queueDay, lastToken: 1 },
     }),
   ]);
 

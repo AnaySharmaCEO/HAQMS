@@ -1,10 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Navbar from '@/components/common/Navbar';
 import { Activity, Bell, Monitor, RefreshCw, AlertCircle } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
 
 export default function QueueMonitor() {
+  const { token, API_BASE_URL } = useAuth();
   const [tokens, setTokens] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -12,67 +14,75 @@ export default function QueueMonitor() {
   // Duplicated config state just to add minor code smell
   const [refreshCount, setRefreshCount] = useState(0);
 
-  // HARDCODED API BASE URL: Duplicated from AuthContext (code duplication smell)
-  const API_BASE_URL = 'http://localhost:5000/api';
+  const intervalRef = useRef(null);
+  const abortRef = useRef(null);
 
-  const fetchQueueData = async () => {
+  const fetchQueueData = useCallback(async () => {
+    // Abort any in-flight poll before starting a new one.
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
-      // Insecure: Fetches queue without checking credentials (it's a public dashboard, which is fine, 
-      // but it uses the hardcoded API domain)
-      const res = await fetch(`${API_BASE_URL}/queue`);
+      const res = await fetch(`${API_BASE_URL}/queue`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        signal: controller.signal,
+      });
       if (!res.ok) {
+        if (res.status === 401) {
+          throw new Error('This monitor requires authentication. Please log in.');
+        }
         throw new Error('Failed to retrieve active token queue.');
       }
       const data = await res.json();
       setTokens(data);
       setError('');
     } catch (err) {
+      if (err?.name === 'AbortError') return;
       console.error('Queue poll fetch error:', err);
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  };
+  }, [API_BASE_URL, token]);
 
   useEffect(() => {
     // Initial fetch
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchQueueData();
 
-    // MEMORY LEAK BUG:
-    // This setInterval has NO cleanup function (does not return clearInterval).
-    // Every time this page is mounted, a new background polling timer is spun up.
-    // If the candidate navigates between Dashboard and Queue multiple times,
-    // dozens of parallel intervals will poll the database, causing memory bloat,
-    // state update crashes on unmounted components, and heavy server load.
-    const intervalId = setInterval(() => {
-      console.log(`[POLL] Active Queue Poll #${refreshCount + 1} firing...`);
+    intervalRef.current = setInterval(() => {
       fetchQueueData();
       setRefreshCount((prev) => prev + 1);
     }, 3000);
 
-    // Junior Developer Note: "Interval created, will run forever to keep dashboard fully synced!"
-    // Missing: return () => clearInterval(intervalId);
-  }, []); // Note that refreshCount dependency is missing too, causing stale closure on log!
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (abortRef.current) abortRef.current.abort();
+    };
+  }, [fetchQueueData]);
 
   // Group tokens by doctor
-  const groupedTokens = tokens.reduce((groups, token) => {
-    const docId = token.doctorId;
-    if (!groups[docId]) {
-      groups[docId] = {
-        doctorName: token.doctor.name,
-        specialization: token.doctor.specialization,
-        calling: null,
-        waiting: [],
-      };
-    }
-    
-    if (token.status === 'CALLING') {
-      groups[docId].calling = token;
-    } else if (token.status === 'WAITING') {
-      groups[docId].waiting.push(token);
-    }
-    return groups;
-  }, {});
+  const groupedTokens = useMemo(() => {
+    return tokens.reduce((groups, t) => {
+      const docId = t.doctorId;
+      if (!groups[docId]) {
+        groups[docId] = {
+          doctorName: t.doctor?.name || 'Unknown Doctor',
+          specialization: t.doctor?.specialization || 'Unknown',
+          calling: null,
+          waiting: [],
+        };
+      }
+
+      if (t.status === 'CALLING') groups[docId].calling = t;
+      else if (t.status === 'WAITING') groups[docId].waiting.push(t);
+
+      return groups;
+    }, {});
+  }, [tokens]);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -110,8 +120,22 @@ export default function QueueMonitor() {
         {error && (
           <div className="p-4 mb-6 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-500 flex items-center gap-3 text-sm">
             <AlertCircle className="h-5 w-5 shrink-0" />
-            <div>
-              <strong>Sync Error:</strong> {error} - Please verify that the backend API server is online.
+            <div className="flex-1 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <strong>Sync Error:</strong> {error === 'This monitor requires authentication. Please log in.' ? (
+                  <span>Authentication required. This monitor requires staff credentials to view live queues.</span>
+                ) : (
+                  <span>{error} - Please verify that the backend API server is online.</span>
+                )}
+              </div>
+              {error === 'This monitor requires authentication. Please log in.' && (
+                <a
+                  href="/login?redirect=/queue"
+                  className="px-3.5 py-1.5 rounded bg-rose-500 text-white dark:bg-rose-600 dark:hover:bg-rose-500 hover:bg-rose-600 font-extrabold text-xs transition-colors shrink-0 text-center"
+                >
+                  Log In
+                </a>
+              )}
             </div>
           </div>
         )}

@@ -1,62 +1,77 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
 const { authenticate } = require('../middleware/auth');
+const { startOfUtcDay } = require('../utils/queueDay');
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
 // GET /api/reports/doctor-stats
-// Highly inefficient nested loop aggregate reporting for admin/receptionists dashboard
-// PERFORMANCE BUG: Performs multiple nested DB queries inside a loop for every doctor.
-// Runs sequentially, blocking/scaling terrible with doctors count.
+// Optimized aggregate reporting for admin/receptionists dashboard.
 router.get('/doctor-stats', authenticate, async (req, res) => {
   try {
     const start = Date.now();
 
-    // 1. Fetch all doctors
-    const doctors = await prisma.doctor.findMany();
-    const reportData = [];
+    const queueDay = startOfUtcDay();
 
-    // 2. Loop through every doctor and query databases sequentially!
-    for (const doc of doctors) {
-      console.log(`[SLOW REPORT] Querying stats sequentially for doctor: ${doc.name}`);
-
-      // Count total appointments
-      const totalAppointments = await prisma.appointment.count({
-        where: { doctorId: doc.id },
-      });
-
-      // Count completed appointments
-      const completedAppointments = await prisma.appointment.count({
-        where: { doctorId: doc.id, status: 'COMPLETED' },
-      });
-
-      // Count cancelled appointments
-      const cancelledAppointments = await prisma.appointment.count({
-        where: { doctorId: doc.id, status: 'CANCELLED' },
-      });
-
-      // Fetch queue tokens count today
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const queueTokensCount = await prisma.queueToken.count({
-        where: {
-          doctorId: doc.id,
-          createdAt: { gte: today },
+    const [
+      doctors,
+      totalAppointmentsByDoctor,
+      completedAppointmentsByDoctor,
+      cancelledAppointmentsByDoctor,
+      todayQueueByDoctor,
+    ] = await Promise.all([
+      prisma.doctor.findMany({
+        select: {
+          id: true,
+          name: true,
+          specialization: true,
+          department: true,
+          consultationFee: true,
         },
-      });
+      }),
+      prisma.appointment.groupBy({
+        by: ['doctorId'],
+        _count: { _all: true },
+      }),
+      prisma.appointment.groupBy({
+        by: ['doctorId'],
+        where: { status: 'COMPLETED' },
+        _count: { _all: true },
+      }),
+      prisma.appointment.groupBy({
+        by: ['doctorId'],
+        where: { status: 'CANCELLED' },
+        _count: { _all: true },
+      }),
+      prisma.queueToken.groupBy({
+        by: ['doctorId'],
+        where: { queueDay },
+        _count: { _all: true },
+      }),
+    ]);
 
-      // Calculate total potential revenue
-      const appointmentsList = await prisma.appointment.findMany({
-        where: { doctorId: doc.id, status: 'COMPLETED' },
-      });
-      const revenue = appointmentsList.length * doc.consultationFee;
+    const toCountMap = (rows) => {
+      const m = new Map();
+      for (const r of rows) m.set(r.doctorId, r._count._all);
+      return m;
+    };
 
-      // Add artifical wait to simulate load under scaled database
-      // "Ensures database connection doesn't drop" - junior dev comment
-      await new Promise(r => setTimeout(r, 80));
+    const totalMap = toCountMap(totalAppointmentsByDoctor);
+    const completedMap = toCountMap(completedAppointmentsByDoctor);
+    const cancelledMap = toCountMap(cancelledAppointmentsByDoctor);
+    const queueMap = toCountMap(todayQueueByDoctor);
 
-      reportData.push({
+    const reportData = doctors.map((doc) => {
+      const totalAppointments = totalMap.get(doc.id) || 0;
+      const completedAppointments = completedMap.get(doc.id) || 0;
+      const cancelledAppointments = cancelledMap.get(doc.id) || 0;
+      const todayQueueSize = queueMap.get(doc.id) || 0;
+
+      // Revenue is based on completed appointments (no need to fetch rows).
+      const revenue = completedAppointments * doc.consultationFee;
+
+      return {
         id: doc.id,
         name: doc.name,
         specialization: doc.specialization,
@@ -64,10 +79,10 @@ router.get('/doctor-stats', authenticate, async (req, res) => {
         totalAppointments,
         completedAppointments,
         cancelledAppointments,
-        todayQueueSize: queueTokensCount,
+        todayQueueSize,
         revenue,
-      });
-    }
+      };
+    });
 
     const durationMs = Date.now() - start;
 
@@ -77,7 +92,8 @@ router.get('/doctor-stats', authenticate, async (req, res) => {
       data: reportData,
     });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to generate report', details: error.message });
+    console.error('Doctor stats report error:', error);
+    res.status(500).json({ error: 'Failed to generate report' });
   }
 });
 

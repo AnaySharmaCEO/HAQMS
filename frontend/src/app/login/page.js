@@ -1,18 +1,31 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { User, Lock, Activity, Eye, EyeOff } from 'lucide-react';
 
 export default function Login() {
   const { login, error: authError, loading } = useAuth();
+  const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [redirectTo, setRedirectTo] = useState('/dashboard');
   
   // Local validation issues
   const [validationError, setValidationError] = useState('');
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const redir = params.get('redirect');
+      if (redir) {
+        setRedirectTo(redir);
+      }
+    }
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -37,7 +50,9 @@ export default function Login() {
     // causing inconsistent user experiences and letting brute force slide.
     
     const result = await login(email, password);
-    if (!result.success) {
+    if (result.success) {
+      router.push(redirectTo);
+    } else {
       setValidationError(result.error || 'Invalid credentials');
     }
   };
