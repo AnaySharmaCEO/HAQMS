@@ -23,7 +23,13 @@ const reportRoutes = require('./routes/reports');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(cors());
+app.use(cors({
+  origin: [
+    "http://localhost:3000",
+    "haqmsclient.vercel.app"
+  ],
+  credentials: true
+}));
 app.use(express.json({ limit: '100kb' }));
 
 // Lightweight rate limiting for auth endpoints (in-memory, per-process).
